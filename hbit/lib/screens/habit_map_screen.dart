@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/habit_map.dart';
 import '../models/tiny_habit.dart';
+import '../services/notification_service.dart';
 
 /// Step 2 of the Tiny Habits flow: the generated habit map.
 class HabitMapScreen extends StatelessWidget {
@@ -26,8 +27,8 @@ class HabitMapScreen extends StatelessWidget {
       builder: (context) => AlertDialog(
         title: const Text('Start a new map?'),
         content: const Text(
-          'This clears your current aspiration and habits, then lets you '
-          'enter a new goal.',
+          'This clears your current aspiration and habits, cancels all '
+          'reminders, then lets you enter a new goal.',
         ),
         actions: [
           TextButton(
@@ -44,6 +45,75 @@ class HabitMapScreen extends StatelessWidget {
     if (confirmed == true) onReset();
   }
 
+  /// Asks for permission, picks a time, and schedules a daily reminder.
+  Future<void> _editReminder(BuildContext context, TinyHabit habit) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final granted = await NotificationService.instance.requestPermission();
+    if (!granted) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Notifications are off. Enable them in system settings to '
+            'get habit reminders.',
+          ),
+        ),
+      );
+      return;
+    }
+    if (!context.mounted) return;
+
+    final initial = habit.hasReminder
+        ? TimeOfDay(hour: habit.reminderHour!, minute: habit.reminderMinute!)
+        : const TimeOfDay(hour: 8, minute: 0);
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: initial,
+      helpText: 'Remind me daily at',
+    );
+    if (picked == null) return;
+
+    habit.reminderHour = picked.hour;
+    habit.reminderMinute = picked.minute;
+    final next = await NotificationService.instance.scheduleReminder(habit);
+    onChanged(habitMap);
+
+    final time = '${picked.hour.toString().padLeft(2, '0')}:'
+        '${picked.minute.toString().padLeft(2, '0')}';
+    final when =
+        DateUtils.isSameDay(next, DateTime.now()) ? 'today' : 'tomorrow';
+    messenger.showSnackBar(
+      SnackBar(content: Text('Reminder set — first one fires $when at $time.')),
+    );
+  }
+
+  Future<void> _sendTest(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final granted = await NotificationService.instance.requestPermission();
+    if (!granted) {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Notifications are off. Enable them in system settings first.',
+          ),
+        ),
+      );
+      return;
+    }
+    await NotificationService.instance.sendTestReminder();
+    messenger.showSnackBar(
+      const SnackBar(
+        content: Text('Test reminder scheduled — watch for it in ~10 seconds.'),
+      ),
+    );
+  }
+
+  Future<void> _clearReminder(TinyHabit habit) async {
+    await NotificationService.instance.cancelReminder(habit);
+    habit.reminderHour = null;
+    habit.reminderMinute = null;
+    onChanged(habitMap);
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -54,6 +124,11 @@ class HabitMapScreen extends StatelessWidget {
         title: const Text('My Habit Map'),
         backgroundColor: theme.colorScheme.inversePrimary,
         actions: [
+          IconButton(
+            tooltip: 'Send a test reminder',
+            icon: const Icon(Icons.notifications_active_outlined),
+            onPressed: () => _sendTest(context),
+          ),
           IconButton(
             tooltip: 'New map',
             icon: const Icon(Icons.refresh),
@@ -75,7 +150,8 @@ class HabitMapScreen extends StatelessWidget {
             const SizedBox(height: 4),
             Text(
               'Each habit is anchored to a routine you already have. Do the '
-              'tiny version, then celebrate immediately.',
+              'tiny version, then celebrate immediately. Tap the alarm to get '
+              'a daily reminder.',
               style: theme.textTheme.bodySmall
                   ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
             ),
@@ -89,6 +165,8 @@ class HabitMapScreen extends StatelessWidget {
                     habit.done = !habit.done;
                     onChanged(habitMap);
                   },
+                  onEditReminder: () => _editReminder(context, habit),
+                  onClearReminder: () => _clearReminder(habit),
                 ),
               const SizedBox(height: 8),
             ],
@@ -215,10 +293,23 @@ class _DomainHeader extends StatelessWidget {
 }
 
 class _HabitCard extends StatelessWidget {
-  const _HabitCard({required this.habit, required this.onToggle});
+  const _HabitCard({
+    required this.habit,
+    required this.onToggle,
+    required this.onEditReminder,
+    required this.onClearReminder,
+  });
 
   final TinyHabit habit;
   final VoidCallback onToggle;
+  final VoidCallback onEditReminder;
+  final VoidCallback onClearReminder;
+
+  String get _reminderLabel {
+    final h = habit.reminderHour!.toString().padLeft(2, '0');
+    final m = habit.reminderMinute!.toString().padLeft(2, '0');
+    return '$h:$m';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -285,6 +376,13 @@ class _HabitCard extends StatelessWidget {
                         ),
                       ],
                     ),
+                    const SizedBox(height: 8),
+                    _ReminderRow(
+                      hasReminder: habit.hasReminder,
+                      label: habit.hasReminder ? _reminderLabel : null,
+                      onEdit: onEditReminder,
+                      onClear: onClearReminder,
+                    ),
                   ],
                 ),
               ),
@@ -292,6 +390,60 @@ class _HabitCard extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// The reminder control shown at the bottom of each habit card.
+class _ReminderRow extends StatelessWidget {
+  const _ReminderRow({
+    required this.hasReminder,
+    required this.label,
+    required this.onEdit,
+    required this.onClear,
+  });
+
+  final bool hasReminder;
+  final String? label;
+  final VoidCallback onEdit;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    if (!hasReminder) {
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: TextButton.icon(
+          onPressed: onEdit,
+          icon: const Icon(Icons.add_alarm, size: 18),
+          label: const Text('Add daily reminder'),
+          style: TextButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            visualDensity: VisualDensity.compact,
+          ),
+        ),
+      );
+    }
+
+    return Row(
+      children: [
+        ActionChip(
+          avatar: Icon(Icons.alarm,
+              size: 16, color: theme.colorScheme.onSecondaryContainer),
+          label: Text('Daily at $label'),
+          backgroundColor: theme.colorScheme.secondaryContainer,
+          side: BorderSide.none,
+          onPressed: onEdit,
+        ),
+        IconButton(
+          tooltip: 'Remove reminder',
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.close, size: 18),
+          onPressed: onClear,
+        ),
+      ],
     );
   }
 }

@@ -12,6 +12,8 @@ class TinyHabit {
     required this.impact,
     required this.ease,
     this.done = false,
+    this.reminderHour,
+    this.reminderMinute,
   });
 
   final String id;
@@ -39,11 +41,24 @@ class TinyHabit {
   /// Whether the user has done this habit in the current session.
   bool done;
 
+  /// Hour (0-23) of the daily reminder, or null if no reminder is set.
+  int? reminderHour;
+
+  /// Minute (0-59) of the daily reminder, or null if no reminder is set.
+  int? reminderMinute;
+
   /// The Fogg recipe as one readable sentence.
   String get recipe => '$anchorPrompt, $tinyAction.';
 
   /// High impact AND high feasibility — a Tiny Habits "Golden Behavior".
   bool get isGolden => impact >= 4 && ease >= 4;
+
+  /// Whether a daily reminder is currently scheduled for this habit.
+  bool get hasReminder => reminderHour != null && reminderMinute != null;
+
+  /// Stable, non-negative id used to schedule/cancel this habit's
+  /// Android notification.
+  int get notificationId => id.hashCode & 0x7fffffff;
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -56,6 +71,8 @@ class TinyHabit {
         'impact': impact,
         'ease': ease,
         'done': done,
+        'reminderHour': reminderHour,
+        'reminderMinute': reminderMinute,
       };
 
   factory TinyHabit.fromJson(Map<String, dynamic> json) => TinyHabit(
@@ -69,5 +86,7 @@ class TinyHabit {
         impact: json['impact'] as int,
         ease: json['ease'] as int,
         done: json['done'] as bool? ?? false,
+        reminderHour: json['reminderHour'] as int?,
+        reminderMinute: json['reminderMinute'] as int?,
       );
 }

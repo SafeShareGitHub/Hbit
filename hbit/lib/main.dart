@@ -4,8 +4,11 @@ import 'models/habit_map.dart';
 import 'screens/aspiration_screen.dart';
 import 'screens/habit_map_screen.dart';
 import 'services/habit_storage.dart';
+import 'services/notification_service.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await NotificationService.instance.init();
   runApp(const HbitApp());
 }
 
@@ -44,6 +47,12 @@ class _RootPageState extends State<RootPage> {
   void initState() {
     super.initState();
     _loadSavedMap();
+    // Ask for notification permission once, after the first frame. Android
+    // only surfaces the system dialog once, so calling it on every start is
+    // harmless if the user has already answered.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      NotificationService.instance.requestPermission();
+    });
   }
 
   Future<void> _loadSavedMap() async {
@@ -53,6 +62,10 @@ class _RootPageState extends State<RootPage> {
       _map = map;
       _loading = false;
     });
+    // Keep scheduled reminders in sync with the saved map.
+    if (map != null) {
+      await NotificationService.instance.syncAll(map.habits);
+    }
   }
 
   Future<void> _persist(HabitMap map) async {
@@ -61,6 +74,7 @@ class _RootPageState extends State<RootPage> {
   }
 
   Future<void> _reset() async {
+    await NotificationService.instance.cancelAll();
     setState(() => _map = null);
     await _storage.clear();
   }
